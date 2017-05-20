@@ -1,0 +1,16 @@
+{
+    "sources": {
+        "two_values": {
+            "//a value//": {"type": "const", "value": "42"}
+        },
+        "index": {
+            "//two values file//": {"type": "ref", "source": "./two_values"},
+            "//static file//": {"type": "ref", "source": "static_file"},
+            "//whole dir//": {"type": "ref", "source": "dir"}
+        },
+        "dir/in_dir_file": {
+            "//two values//": {"type": "ref", "source": "two_values"}
+        }
+    },
+    "targets": ["index"]
+}
