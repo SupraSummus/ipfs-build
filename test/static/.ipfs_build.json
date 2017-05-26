@@ -1,0 +1,8 @@
+{
+    "sources": {
+        "index": {
+            "type": "static",
+            "product_id": "abcdefgh"
+        }
+    }
+}

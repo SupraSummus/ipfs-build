@@ -7,7 +7,9 @@ import subprocess
 import re
 from tempfile import TemporaryDirectory
 import json
+import glob
 
+### general environment ###
 
 @contextmanager
 def pushed(stack, value):
@@ -16,33 +18,44 @@ def pushed(stack, value):
     popped = stack.pop()
     assert(popped == value)
 
-
 class Environment:
+
     @classmethod
-    def from_dict(cls, description):
+    def from_dict(cls, d, source_constructors, **kwargs):
+        source_types = {
+            name: Source.from_dict(source_d, source_constructors=source_constructors, **kwargs)
+            for name, source_d in description.get('source_types', {}).items()
+        }
+        source_constructors['source_type'] = lambda d: source_types[d['name']]
+
         return cls(
             sources={
-                name: Source.from_dict(source)
-                for name, source in description.get('sources', {}).items()
+                source_id: Source.from_dict(source_d, source_constructors=source_constructors, **kwargs)
+                for source_id, source_d in description.get('sources', {}).items()
             },
-            targets=description.get('targets')
+            targets=description.get('targets', description.get('sources', {}).keys())
         )
 
-    def __init__(self, sources, targets=None):
-        self.sources = sources
-        self.targets = targets or self.sources.keys()
-        self.build_stack = []
+    @staticmethod
+    def print_result(result):
+        print(json.dumps({
+            k: v.decode() for k, v in result.items()
+        }, indent=4, sort_keys=True))
 
+    def __init__(self, sources, targets=None, **kwargs):
+        self.sources = sources
+        self.targets = targets or sources.keys()
+        self.build_stack = []
+        super().__init__(**kwargs)
+
+    @lru_cache(maxsize=None)
     def product_id(self, source_id):
         if source_id in self.build_stack:
             raise RuntimeError('dependency cycle detected: {}'.format(
                 '; '.join(self.build_stack)
             ))
         with pushed(self.build_stack, source_id):
-            return self.product_id_unsafe(source_id)
-
-    def product_id_unsafe(self, source_id):
-        raise NotImplementedError()
+            return self.sources[source_id].product_id(self, source_id)
 
     def build(self):
         return {
@@ -51,62 +64,102 @@ class Environment:
         }
 
 
-class PathBasedIPFSEnvironment(Environment):
+class Source:
 
     @staticmethod
-    def print_result(result):
-        print(json.dumps({
-            k: v.decode('ASCII') for k, v in result.items()
-        }, indent=4, sort_keys=True))
+    def from_dict(d, source_constructors, **kwargs):
+        dd = d.copy()
+        del dd['type']
+        return source_constructors[d['type']](dd, **kwargs)
 
-    def __init__(self, sources, *args, **kwargs):
-        super().__init__({
-            os.path.realpath(key): source
-            for key, source in sources.items()
-        }, *args, **kwargs)
+    def product_id(self, environment, source_id):
+        raise NotImplementedError()
+
+
+class StaticSource(Source):
+    type = 'static'
+
+    @classmethod
+    def from_dict(cls, d, **kwargs):
+        return cls(product_id=d['product_id'].encode())
+
+    def __init__(self, product_id, **kwargs):
+        self._product_id = product_id
+        super().__init__(**kwargs)
+
+    def product_id(self, environment, source_id):
+        return self._product_id
+
+
+### path environment ###
+
+class PathEnvironment(Environment):
+
+    def __init__(self, sources, **kwargs):
+        super().__init__(sources={
+            os.path.realpath(path): source
+            for path, source in sources.items()
+        }, **kwargs)
+
+    def default_source_for_file(self):
+        raise NotImplementedError()
+
+    def default_source_for_dir(self):
+        raise NotImplementedError()
 
     def product_id(self, source_id):
-        return super().product_id(os.path.realpath(source_id))
+        source_id = os.path.realpath(source_id)
+        if source_id not in self.sources:
+            if os.path.isdir(source_id):
+                source = self.default_source_for_dir()
 
-    @lru_cache(maxsize=None)
-    def product_id_unsafe(self, source_id):
-        source = self.sources.get(source_id)
+            elif os.path.isfile(source_id):
+                source = self.default_source_for_file()
 
-        if os.path.isdir(source_id):
-            if source is not None:
-                if source.fillers != {}:
-                    raise RuntimeError('substitution rules specified in directories are not supported ({})'.format(
-                        source_id
-                    ))
-
-            # TODO fix
-            # this has terrible complexity (number_of_dirs_and_files^2 i guess) but the code is simple, which is nice
-            subbuilds = {
-                p: self.product_id(os.path.join(source_id, p))
-                for p in os.listdir(source_id)
-            }
-            with TemporaryDirectory() as tempdir:
-                for name, product_id in subbuilds.items():
-                    self.ipfs_get(product_id, os.path.join(tempdir, name))
-                return self.ipfs_add_path(tempdir)
-
-        elif os.path.isfile(source_id):
-            if source is not None:
-                with open(source_id, 'rb') as file:
-                    data = file.read()
-                data = source.render(data, self)
-                return self.ipfs_add_data(data)
             else:
-                return self.ipfs_add_path(source_id)
+                raise RuntimeError('nonexistent source: {}'.format(source_id))
 
-        else:
-            raise RuntimeError('nonexistent source: {}'.format(source_id))
+            self.sources[source_id] = source
+        return super().product_id(source_id)
 
     def build(self):
         return {
             os.path.relpath(source_id): product_id
             for source_id, product_id in super().build().items()
         }
+
+    def read(self, path):
+        with open(path, 'rb') as f:
+            return f.read()
+
+
+class WildcardPathEnvironment(PathEnvironment):
+
+    def __init__(self, sources, targets, **kwargs):
+
+        raw_sources = {}
+        for wildcard_path, source in sources.items():
+            for path in glob.glob(wildcard_path, recursive=True):
+                if path in raw_sources:
+                    raise RuntimeError('multiple sources for id {}'.format(path))
+                raw_sources[path] = source
+
+        raw_targets = []
+        for t in targets:
+            raw_targets.extend(glob.glob(t))
+
+        super().__init__(sources=raw_sources, targets=raw_targets, **kwargs)
+
+
+### IPFS environment ###
+
+class IPFSEnvironment(PathEnvironment):
+
+    def default_source_for_file(self):
+        return IPFSFileSource()
+
+    def default_source_for_dir(self):
+        return IPFSDirSource()
 
     def ipfs_add_data(self, data):
         return subprocess.run(['ipfs', 'add', '-Q'], input=data, stdout=subprocess.PIPE).stdout.strip()
@@ -118,59 +171,101 @@ class PathBasedIPFSEnvironment(Environment):
         subprocess.run(['ipfs', 'get', '-o', dest, hash], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-class Source:
+class IPFSFileSource:
+
+    def product_id(self, environment, source_id):
+        return environment.ipfs_add_path(source_id)
+
+
+class IPFSDirSource:
+
+    def product_id(self, environment, source_id):
+        # TODO fix
+        # this has terrible complexity (n^2 i guess) but the code is simple, which is nice
+        subbuilds = {
+            p: environment.product_id(os.path.join(source_id, p))
+            for p in os.listdir(source_id)
+        }
+        with TemporaryDirectory() as tempdir:
+            for name, product_id in subbuilds.items():
+                environment.ipfs_get(product_id, os.path.join(tempdir, name))
+            return environment.ipfs_add_path(tempdir)
+
+
+class IPFSDataSource(Source):
+
+    def product_id(self, environment, source_id):
+        return environment.ipfs_add_data(self.get_data(environment, source_id))
+
+    def get_data(self, environment):
+        raise NotImplementedError()
+
+
+class IPFSReplaceSource(IPFSDataSource):
+    type = 'replace'
+
     @classmethod
-    def from_dict(cls, description):
-        return cls({
-            placeholder.encode('UTF-8'): Filler.from_dict(filler)
-            for placeholder, filler in description.items()
-        })
+    def from_dict(cls, d, **kwargs):
+        return cls(
+            replace={
+                key.encode(): s
+                for key, s in d['replace'].items()
+            }
+        )
 
-    def __init__(self, fillers):
-        self.fillers = fillers
+    def __init__(self, replace, **kwargs):
+        self.replace = replace
+        super().__init__(**kwargs)
 
-    def render(self, data, environment):
+    def get_data(self, environment, source_id):
         d = {
-            key: filler.value(environment) for
-            key, filler in self.fillers.items()
+            key: environment.product_id(subsource_id) for
+            key, subsource_id in self.replace.items()
         }
         pattern = re.compile(b'|'.join([
             re.escape(key) for key in d.keys()
         ]))
-        return pattern.sub(lambda x: d[x.group()], data)
+        return pattern.sub(lambda x: d[x.group()], environment.read(source_id))
 
 
-class Filler:
+class IPFSRegexpSource(IPFSDataSource):
+    type = 'regexp'
+
     @classmethod
-    def from_dict(cls, description):
-        return {
-            'const': lambda d: ConstantFiller(d['value'].encode('UTF-8')),
-            'ref': lambda d: SourceReferenceFiller(d['source']),
-        }[description['type']](description)
+    def from_dict(cls, d, **kwargs):
+        return cls(
+            pattern=d['pattern'].encode(),
+            replacement=d.get('replacement', '{}').encode(),
+            source=d.get('source', '{}')
+        )
 
-    def value(self, environment):
-        raise NotImplementedError()
+    def __init__(self, pattern, replacement=b'{}', source='{}', **kwargs):
+        self.pattern = pattern
+        self.replacement = replacement
+        self.source = source
+        super().__init__(**kwargs)
+
+    def get_data(self, environment, source_id):
+        def replace_f(match):
+            product_id = environment.product_id(self.source.format(
+                *[g.decode() for g in match.groups()],
+                **{name: g.decode() for name, g in match.groupdict().items()}
+            ))
+            return self.replacement.replace(b'{}', product_id)
+        return re.compile(self.pattern).sub(replace_f, environment.read(source_id))
 
 
-class ConstantFiller(Filler):
-    def __init__(self, val):
-        self.val = val
+source_constructors = {
+    StaticSource.type: StaticSource.from_dict,
+    IPFSReplaceSource.type: IPFSReplaceSource.from_dict,
+    IPFSRegexpSource.type: IPFSRegexpSource.from_dict,
+}
 
-    def value(self, environment):
-        return self.val
-
-
-class SourceReferenceFiller(Filler):
-    def __init__(self, source_id):
-        self.source_id = source_id
-
-    def value(self, environment):
-        return environment.product_id(self.source_id)
-
+def build_and_print(env):
+    env.print_result(env.build())
 
 if __name__ == '__main__':
     with open('.ipfs_build.json', 'rt') as f:
         description = json.load(f)
-    environment = PathBasedIPFSEnvironment.from_dict(description)
-    result = environment.build()
-    PathBasedIPFSEnvironment.print_result(result)
+    environment = IPFSEnvironment.from_dict(description, source_constructors=source_constructors)
+    build_and_print(environment)

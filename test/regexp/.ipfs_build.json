@@ -1,0 +1,18 @@
+{
+    "sources": {
+        "index": {
+            "type": "regexp",
+            "pattern": "load\\('([^']*)\\.code'\\)",
+            "replacement": "load('/ipfs/{}')",
+            "source": "prefix_{}_sufix"
+        },
+        "prefix_a_sufix": {
+            "type": "static",
+            "product_id": "nukes"
+        },
+        "prefix_b_sufix": {
+            "type": "static",
+            "product_id": "codes"
+        }
+    }
+}

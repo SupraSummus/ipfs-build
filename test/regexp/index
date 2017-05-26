@@ -1,0 +1,4 @@
+load('a.code')
+load('b.code')
+
+nukes.launch(codes.code_for_nuke(nukes.nuke(0)))

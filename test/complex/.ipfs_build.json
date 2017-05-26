@@ -1,0 +1,15 @@
+{
+    "source_types": {
+        "slash_slash": {
+            "type": "regexp",
+            "pattern": "//(([^/]|/[^/])*)//"
+        }
+    },
+    "sources": {
+        "a value": {"type": "static", "product_id": "42"},
+        "two_values": {"type": "source_type", "name": "slash_slash"},
+        "index": {"type": "source_type", "name": "slash_slash"},
+        "dir/in_dir_file": {"type": "source_type", "name": "slash_slash"}
+    },
+    "targets": ["index"]
+}

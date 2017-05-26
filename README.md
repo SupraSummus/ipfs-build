@@ -20,9 +20,9 @@ Examples
 
     {"sources": {
         "index.md": {
-            "--a-md--": {
-                "type": "ref",
-                "source": "a.md"
+            "type": "replace",
+            "replace": {
+                "--a-md--": "a.md"
             }
         }
     }}
@@ -48,11 +48,12 @@ And configure substituted value in `.ipfs_build.json`:
 
     {"sources": {
         "index.md": {
-            "||md-reader-example||": {
-                "type": "const",
-                "value": "QmSrCRJmzE4zE1nAfWPbzVfanKQNBhp7ZWmMnEdbiLvYNh"
+            "type": "replace",
+            "replace": {
+                "||md-reader-example||": "md-reader"
             }
-        }
+        },
+        "md-reader": {"type": "static", "product_id": "QmSrCRJmzE4zE1nAfWPbzVfanKQNBhp7ZWmMnEdbiLvYNh"}
     }}
 
 ### Building for targets
@@ -74,8 +75,59 @@ hashes will be shown.
         ]
     }
 
+### Replace refs by regexp
+
+File `blabla_a`:
+
+    blablabla
+
+File `blabla_b`:
+
+    blablable
+
+File `index`:
+
+    load(a) a b a b
+    load(b) b a b a
+
+`.ipfs_build.json`:
+
+    {
+        "sources": {
+            "index": {
+                "type": "regexp",
+                "pattern": "load\\(([^\\)]+)\\)",
+                "replacement": "load(ipfs({}))",
+                "source": "blabla_{}"
+            }
+        }
+    }
+
+### Reuse a source
+
+    {
+        "source_types": {
+            "mysource": {
+                // source definition
+            }
+        },
+        "sources": {
+            "index": {"type": "source_type", "name": "mysource"},
+            "other_file": {"type": "source_type", "name": "mysource"}
+        }
+    }
+
+### Use wildcards
+
+    {
+        "sources": {
+            "src/**/*.js": {...},
+            "style/*.css": {...}
+        }
+    }
+
 ### Defining builds in python
 
 `from ipfs_build import *` and rock!
 
-Example at `examples/raw/test.py`.
+Examples at `test/**/test.py`.

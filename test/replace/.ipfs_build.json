@@ -1,0 +1,14 @@
+{
+    "sources": {
+        "index": {
+            "type": "replace",
+            "replace": {
+                "cookies": "strawberries"
+            }
+        },
+        "strawberries": {
+            "type": "static",
+            "product_id": "strawberries"
+        }
+    }
+}
