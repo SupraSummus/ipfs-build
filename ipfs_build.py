@@ -135,25 +135,32 @@ class PathEnvironment(Environment):
 
 class WildcardPathEnvironment(PathEnvironment):
 
-    def __init__(self, sources, targets, **kwargs):
+    @staticmethod
+    def glob_or_id(path):
+        result = glob.glob(path, recursive=True)
+        if result == []:
+            result.append(path)
+        return result
+
+    def __init__(self, sources, targets=None, **kwargs):
 
         raw_sources = {}
         for wildcard_path, source in sources.items():
-            for path in glob.glob(wildcard_path, recursive=True):
+            for path in self.glob_or_id(wildcard_path):
                 if path in raw_sources:
                     raise RuntimeError('multiple sources for id {}'.format(path))
                 raw_sources[path] = source
 
         raw_targets = []
-        for t in targets:
-            raw_targets.extend(glob.glob(t))
+        for t in targets or raw_sources.keys():
+            raw_targets.extend(self.glob_or_id(t))
 
         super().__init__(sources=raw_sources, targets=raw_targets, **kwargs)
 
 
 ### IPFS environment ###
 
-class IPFSEnvironment(PathEnvironment):
+class IPFSEnvironment(WildcardPathEnvironment):
 
     def default_source_for_file(self):
         return IPFSFileSource()

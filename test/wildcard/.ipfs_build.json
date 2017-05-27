@@ -1,0 +1,16 @@
+{
+    "sources": {
+        "entry": {
+            "type": "static",
+            "product_id": "an entry"
+        },
+        "*_index": {
+            "type": "replace",
+            "replace": {
+                "my entry": "entry",
+                "your entry": "entry"
+            }
+        }
+    },
+    "targets": ["*_index"]
+}
